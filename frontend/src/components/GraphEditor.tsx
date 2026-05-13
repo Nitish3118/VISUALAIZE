@@ -171,6 +171,7 @@ function EditorContent({ onBack }: EditorProps) {
   const [copied, setCopied] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('Python');
+  const [showLanguageDropDown, setshowLanguageDropDown] = useState(false);
   const [isRegeneratingCode, setIsRegeneratingCode] = useState(false);
   const [chatHistory, setChatHistory] = useState<{role: 'user' | 'ai', text: string}[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -195,6 +196,7 @@ function EditorContent({ onBack }: EditorProps) {
     setCodeLanguage('Python');
     setChatHistory([]);
     setIsSidebarOpen(false);
+    setshowLanguageDropDown(false);
 
     console.log("🚀 [FRONTEND] Connecting to Backend at:", BACKEND_URL);
 
@@ -239,8 +241,7 @@ function EditorContent({ onBack }: EditorProps) {
     }
   };
 
-  const handleLanguageChange = async (newLang: string) => {
-    if (newLang === codeLanguage || !graphData) return;
+  const regenerateCode = async (newLang: string) => {
     setCodeLanguage(newLang);
     setIsRegeneratingCode(true);
     try {
@@ -250,6 +251,12 @@ function EditorContent({ onBack }: EditorProps) {
       const data = await res.json();
       setGraphData((prev: GraphData | null) => prev ? ({ ...prev, code_snippet: data.code_snippet, code_explanation: data.code_explanation }) : prev);
     } catch (err) { alert("Failed to rewrite code."); } finally { setIsRegeneratingCode(false); }
+  } 
+
+  const handleLanguageChange = async (newLang: string) => {
+    setshowLanguageDropDown(false);
+    if (newLang === codeLanguage || !graphData) return;
+    regenerateCode(newLang);
   };
 
   const handleChatSubmit = async (e: React.FormEvent) => {
@@ -434,17 +441,33 @@ function EditorContent({ onBack }: EditorProps) {
                 {activeTab === 'CODE' && (
                   <div className="h-full flex flex-col">
                     <div className="flex justify-between items-center mb-4">
-                      <div className="relative group">
-                          <button className="flex items-center gap-2 text-xs font-bold text-white bg-slate-800 px-3 py-1.5 rounded-lg border border-white/10 hover:border-blue-500/50 transition-colors">
-                              {codeLanguage} <ChevronDown size={12} />
+                      <div className="relative">
+                        <button className="flex items-center gap-2 text-xs font-bold text-white bg-slate-800 px-3 py-1.5 rounded-lg border border-white/10 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all" 
+                          onClick={() => setshowLanguageDropDown(p => !p)}
+                        >
+                          {codeLanguage} 
+                          <ChevronDown size={12} className={`transition-transform ${showLanguageDropDown ? 'rotate-180' : ''}`} />
                           </button>
-                          <div className="absolute top-full left-0 mt-2 w-32 bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden hidden group-hover:block z-50">
+                        {showLanguageDropDown && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-40" 
+                              onClick={() => setshowLanguageDropDown(false)} 
+                            />
+                            
+                            <div className="absolute top-full left-0 mt-2 w-32 bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
                               {['Python', 'JavaScript', 'C++', 'Java'].map(lang => (
-                                  <button key={lang} onClick={() => handleLanguageChange(lang)} className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:bg-blue-600 hover:text-white transition-colors">
+                                <button 
+                                  key={lang} 
+                                  onClick={() => handleLanguageChange(lang)} 
+                                  className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:bg-blue-600 hover:text-white transition-colors first:border-b-0"
+                                >
                                       {lang}
                                   </button>
                               ))}
                           </div>
+                          </>
+                        )}
                       </div>
                       <button onClick={handleCopyCode} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-xs font-bold transition-colors">
                         {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'COPIED' : 'COPY'}
