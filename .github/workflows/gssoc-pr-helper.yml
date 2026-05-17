@@ -1,15 +1,12 @@
 name: GSSOC PR Helper
 
-
 on:
   pull_request_target:
     types: [opened, edited, reopened]
 
-
 permissions:
   pull-requests: write
   issues: write
-
 
 jobs:
   pr-helper:
@@ -25,12 +22,9 @@ jobs:
             const prNumber = context.payload.pull_request.number;
             const creator = context.payload.pull_request.user.login;
 
-
             console.log(`Processing PR #${prNumber} opened by @${creator}`);
 
-
             // --- STEP 1: PARSE AND VALIDATE LINKED ISSUE ---
-            // Pattern to match: Closes #123, Fixes #123, Resolves #123, etc. (case-insensitive)
             const issueRegex = /(?:closes|fixes|resolves)\s+#(\d+)/i;
             const match = prBody.match(issueRegex);
             
@@ -39,3 +33,98 @@ jobs:
             let levelLabel = null;
             
             if (match) {
+              linkedIssueNumber = parseInt(match[1], 10);
+              console.log(`Found linked issue reference: #${linkedIssueNumber}`);
+              
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: linkedIssueNumber
+                });
+                issueInfo = issue;
+                console.log(`Linked issue verified: "${issue.title}"`);
+              } catch (error) {
+                console.error(`Failed to fetch linked issue #${linkedIssueNumber}:`, error.message);
+              }
+            }
+            
+            if (issueInfo) {
+              const labels = issueInfo.labels.map(l => typeof l === 'string' ? l : l.name);
+              console.log(`Issue labels: ${JSON.stringify(labels)}`);
+              
+              const gssocLabels = ['gssoc', 'gssoc2026', 'gssoc-associated', 'gssoc2025'];
+              const isGssocIssue = labels.some(l => gssocLabels.includes(l.toLowerCase()));
+              
+              if (isGssocIssue) {
+                const levelLabelObj = issueInfo.labels.find(l => {
+                  const name = typeof l === 'string' ? l : l.name;
+                  return name.toLowerCase().startsWith('level:');
+                });
+                if (levelLabelObj) {
+                  levelLabel = typeof levelLabelObj === 'string' ? levelLabelObj : levelLabelObj.name;
+                  console.log(`Identified GSSOC level label from issue: ${levelLabel}`);
+                }
+              }
+            }
+            
+            // --- STEP 2: APPLY LABELS TO PR ---
+            const prLabels = [];
+            if (levelLabel) {
+              prLabels.push('gssoc2026', 'gssoc', levelLabel);
+            }
+            
+            if (prLabels.length > 0) {
+              try {
+                console.log(`Applying labels to PR #${prNumber}: ${JSON.stringify(prLabels)}`);
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  labels: prLabels
+                });
+              } catch (error) {
+                console.error(`Error processing linked issue #${linkedIssueNumber}:`, error.message);
+              }
+            }
+
+            // --- STEP 3: CONSTRUCT WELCOME COMMENT ---
+            const commentBody = [
+              `### Hello @${creator}! 👋`,
+              `Thank you for your contribution to **${context.repo.repo}**! We are thrilled to have you here.`,
+              `Based on the linked issue reference, we have automatically applied the relevant GSSOC labels to your PR:`,
+              `- **Event Label:** GSSOC 2026`,
+              `- **Level Label:** ${levelLabel || 'Not specified'}`,
+              `Please ensure you follow the GSSOC guidelines and complete your tasks. If you need any assistance, feel free to tag the mentors or maintainers.`,
+              `Happy coding! 🚀`,
+              `_gssoc-pr-helper-signature_`
+            ].join('\n');
+
+            // --- STEP 4: CHECK AND POST WELCOME COMMENT ---
+            try {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber
+              });
+              const existingWelcomeComment = comments.find(c => c.body.includes('gssoc-pr-helper-signature'));
+              if (existingWelcomeComment) {
+                console.log("Updating existing welcome comment...");
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingWelcomeComment.id,
+                  body: commentBody
+                });
+              } else {
+                console.log("Posting fresh welcome comment...");
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              }
+            } catch (error) {
+              console.error("Failed to post or update GSSOC welcome comment:", error.message);
+            }
