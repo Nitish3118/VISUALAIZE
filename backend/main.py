@@ -31,9 +31,20 @@ def extract_json_from_response(response_text: str) -> str:
         ValueError: If no valid JSON block can be extracted.
     """
     # Try extracting from fenced block first
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
+    match = re.search(
+        r"```json\s*([\s\S]*?)\s*```",
+        response_text,
+        re.IGNORECASE
+    )
+
+    # Fallback to any fenced block
+    if not match:
+        match = re.search(
+            r"```\s*([\s\S]*?)\s*```",
+            response_text
+        )
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip()  
     
     # Fallback: attempt to use raw response as JSON
     stripped = response_text.strip()
