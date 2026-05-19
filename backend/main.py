@@ -27,14 +27,21 @@ def parse_json_response(response_text: str):
     
     # Only unwrap if the entire response is wrapped in backticks
     # This prevents breaking JSON with backticks in field values
-    if response_text.startswith('```') and response_text.endswith('```'):
+    if response_text.startswith('```'):
         # Remove opening fence and any optional Markdown info string (json, JSON, js, etc.)
         response_text = re.sub(r'^```[^\n]*\n?', '', response_text)
         # Remove closing fence (```)
         response_text = re.sub(r'\s*```$', '', response_text)
         response_text = response_text.strip()
     
-    return json.loads(response_text)
+    try:
+        return json.loads(response_text, strict=False)
+    except json.JSONDecodeError as e:
+        print(f"⚠️ JSON Parse Error: {e}. Applying regex fallback for invalid escapes...")
+        # Clean up invalid backslash escapes that break json.loads
+        # Matches a backslash NOT preceded by a backslash, and NOT followed by a valid JSON escape char
+        cleaned_text = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', response_text)
+        return json.loads(cleaned_text, strict=False)
 
 # --- 1. SETUP API KEY ---
 GENAI_KEY = os.getenv("GEMINI_API_KEY")
@@ -144,6 +151,9 @@ async def generate_graph(request: GraphRequest):
       "nodes": [{"id": "1", "label": "Start"}],
       "edges": [{"source": "1", "target": "2", "label": "next"}]
     }
+    
+    IMPORTANT: You MUST return perfectly valid JSON. 
+    All backslashes in code_snippet or strings MUST be properly double-escaped (e.g. \\n, \\t).
     """
     try:
         response_text = get_smart_response(f"{system_prompt}\n\nUSER PROMPT: {request.prompt}", use_json=True)
