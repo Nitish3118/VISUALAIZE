@@ -90,7 +90,14 @@ export default function LoadingCore() {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentMessage((prev) => Math.min(prev + 1, loadingMessages.length - 1));
+      setCurrentMessage((prev) => {
+        const lastIndex = loadingMessages.length - 1;
+        if (prev >= lastIndex) {
+          clearInterval(interval);
+          return prev;
+        }
+        return prev + 1;
+      });
     }, 1500);
 
     return () => clearInterval(interval);

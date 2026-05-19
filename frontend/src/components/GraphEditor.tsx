@@ -45,7 +45,6 @@ import { mergeGraph } from '../utils/mergeGraph';
 import HolographicScene from './HolographicScene';
 import { flushSync } from 'react-dom';
 import LoadingCore from './LoadingCore';
-import LoadingOverlay from './LoadingOverlay';
 
 interface EditorProps { onBack: () => void; }
 
@@ -231,6 +230,16 @@ function EditorContent({ onBack }: EditorProps) {
   const fileInputRef = useRef<HTMLInputElement>(null); 
   const { getNodes, getEdges, fitView } = useReactFlow(); 
 
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fitViewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      if (fitViewTimeoutRef.current) clearTimeout(fitViewTimeoutRef.current);
+    };
+  }, []);
+
   const nodeTypes = useMemo(() => ({ default: CustomNode, input: CustomNode, output: CustomNode }), []);
   const onNodesChange: OnNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)), []);
   const onEdgesChange: OnEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)), []);
@@ -246,8 +255,6 @@ function EditorContent({ onBack }: EditorProps) {
     setIsSidebarOpen(false);
     setshowLanguageDropDown(false);
 
-    console.log("🚀 [FRONTEND] Connecting to Backend at:", BACKEND_URL);
-
     try {
       const res = await fetch(`${BACKEND_URL}/generate`, {
         method: 'POST', 
@@ -257,12 +264,10 @@ function EditorContent({ onBack }: EditorProps) {
       
       if (!res.ok) {
         const errText = await res.text();
-        console.error("❌ [BACKEND ERROR]:", res.status, errText);
         throw new Error(`Server Error (${res.status}): ${errText}`);
       }
       
       const data = await res.json();
-      console.log("✅ [SUCCESS] Data received:", data);
       
       setGraphData(data);
       codeCache.current.clear();
@@ -275,7 +280,6 @@ function EditorContent({ onBack }: EditorProps) {
       const rawEdges: Edge[] = data.edges.map((e: { source: string; target: string; label: string }, i: number) => ({
         id: `e-${i}`, source: e.source, target: e.target, label: e.label, 
         type: 'smoothstep', 
-        animated: true,
         pathOptions: { borderRadius: 40, offset: 15 },
         markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(59, 130, 246, 0.7)', width: 12, height: 12 },
         style: { stroke: 'rgba(59, 130, 246, 0.4)', strokeWidth: 1.5, transition: 'stroke 0.3s ease' },
@@ -294,11 +298,12 @@ function EditorContent({ onBack }: EditorProps) {
         setNodes(merged.nodes);
         setEdges(merged.edges);
       });
-      setTimeout(() => fitView({ padding: 0.2, duration: 800 }), 50);
+      
+      if (fitViewTimeoutRef.current) clearTimeout(fitViewTimeoutRef.current);
+      fitViewTimeoutRef.current = setTimeout(() => fitView({ padding: 0.15, duration: 800 }), 150);
       setIsSidebarOpen(true); 
 
     } catch (err) {
-      console.error("🚨 [CRITICAL ERROR]:", err);
       alert(`System Busy. Please check the console for the exact error.\n\nDetails: ${err}`);
     } finally {
       setIsGenerating(false);
@@ -381,7 +386,10 @@ function EditorContent({ onBack }: EditorProps) {
 
   const handleCopyCode = () => {
     if (graphData?.code_snippet) {
-      navigator.clipboard.writeText(graphData.code_snippet); setCopied(true); setTimeout(() => setCopied(false), 2000);
+      navigator.clipboard.writeText(graphData.code_snippet); 
+      setCopied(true); 
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -432,7 +440,7 @@ function EditorContent({ onBack }: EditorProps) {
 
         {/* MAIN GRAPH AREA */}
         <div className="flex-1 w-full h-full">
-            <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} fitView fitViewOptions={{ padding: 0.15, duration: 400 }} defaultEdgeOptions={{ animated: false, type: "smoothstep" }} minZoom={0.1}>
+            <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} fitView fitViewOptions={{ padding: 0.15, duration: 400 }} defaultEdgeOptions={{ animated: true, type: "smoothstep" }} minZoom={0.1}>
                 <Background color="#94a3b8" gap={40} size={1} variant={BackgroundVariant.Dots} className="opacity-[0.1]" />
                 <Controls /> 
                 <MiniMap className="!bg-slate-900/80 !backdrop-blur-md !border-slate-800 rounded-lg" nodeColor="#3b82f6" maskColor="rgba(15, 23, 42, 0.6)" />

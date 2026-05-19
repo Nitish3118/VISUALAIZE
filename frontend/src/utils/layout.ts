@@ -6,16 +6,26 @@ import { Node, Edge, Position } from 'reactflow';
 const PAGE_WIDTH = 250; 
 const PAGE_HEIGHT = 80;
 
+/**
+ * Calculates the layout positions for nodes and edges using Dagre.
+ *
+ * Args:
+ *     nodes (Node[]): The array of graph nodes.
+ *     edges (Edge[]): The array of graph edges.
+ *
+ * Returns:
+ *     Object: An object containing the layouted nodes and edges.
+ */
 export const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
 
   dagreGraph.setGraph({
     rankdir: 'TB',
-    nodesep: 80, 
-    ranksep: 180, 
-    edgesep: 30, 
-    ranker: 'tight-tree', 
+    nodesep: 100, // Increased to allow natural horizontal clustering
+    ranksep: 180, // Balanced vertical spread
+    edgesep: 40, 
+    ranker: 'network-simplex', // Natively handles balanced hierarchical distribution
     acyclicer: 'greedy', 
   });
 
@@ -23,20 +33,29 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
     dagreGraph.setNode(node.id, { width: PAGE_WIDTH, height: PAGE_HEIGHT });
   });
 
+  // --- Layer Assignment Logic ---
+  /**
+   * Determines the structural layer index based on the node's label.
+   *
+   * Args:
+   *     label (string): The text label of the node.
+   *
+   * Returns:
+   *     number: The integer layer index representing the hierarchy level.
+   */
+  const getLayer = (label: string): number => {
+    const lower = label.toLowerCase();
+    if (lower.match(/client|admin|user|web|frontend|app|browser|ui|dashboard/)) return 0;
+    if (lower.match(/gateway|proxy|balancer|nginx|api|lb/)) return 1;
+    if (lower.match(/db|database|redis|cache|queue|kafka|mongo|postgres|sql|storage|bucket/)) return 3;
+    return 2; // Core Services
+  };
+
   edges.forEach((edge) => {
     dagreGraph.setEdge(edge.source, edge.target, { weight: 1 });
   });
 
   dagre.layout(dagreGraph);
-
-  // --- 1. Layer Assignment Logic ---
-  const getLayer = (label: string): number => {
-    const lower = label.toLowerCase();
-    if (lower.match(/client|admin|user|web|frontend|app|browser|ui/)) return 0;
-    if (lower.match(/gateway|proxy|balancer|nginx|api/)) return 1;
-    if (lower.match(/db|database|redis|cache|queue|kafka|mongo|postgres|sql|storage|bucket/)) return 3;
-    return 2; // Core Services
-  };
 
   const layers: Record<number, Node[]> = { 0: [], 1: [], 2: [], 3: [] };
 
@@ -53,11 +72,12 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
     });
   });
 
-  // --- 2. Post-Layout Position Correction for Symmetry ---
+  // --- Post-Layout Position Correction for Symmetry ---
   const layoutedNodes: Node[] = [];
-  const LAYER_SPACING_Y = 220; // Consistent vertical gap
-  const NODE_SPACING_X = 80;   // Consistent horizontal gap
+  const LAYER_SPACING_Y = 250; // Increased to prevent vertical edge label overlap
+  const NODE_SPACING_X = 150;   // Increased to prevent horizontal node overlapping
 
+  let activeRowIndex = 0;
   Object.keys(layers).forEach((key) => {
     const layerIndex = parseInt(key);
     const layerNodes = layers[layerIndex];
@@ -75,11 +95,12 @@ export const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
         ...node,
         position: {
           x: currentX,
-          y: layerIndex * LAYER_SPACING_Y,
+          y: activeRowIndex * LAYER_SPACING_Y,
         }
       });
       currentX += PAGE_WIDTH + NODE_SPACING_X;
     });
+    activeRowIndex++;
   });
 
   return { nodes: layoutedNodes, edges };
