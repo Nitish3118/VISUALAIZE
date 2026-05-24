@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -95,6 +96,12 @@ class CodeRequest(BaseModel):
     language: str
 
 def get_smart_response(prompt_text, use_json=False):
+    if not GENAI_KEY or GENAI_KEY == "missing" or not GENAI_KEY.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="GEMINI_API_KEY_MISSING: Gemini API key is missing. Please configure GEMINI_API_KEY in your .env file."
+        )
+
     last_error = None
     
     # Loop through the models we FOUND (not guessed)
@@ -115,7 +122,46 @@ def get_smart_response(prompt_text, use_json=False):
             print(f"✅ SUCCESS with {clean_name}!")
             return response.text
             
+        except google_exceptions.Unauthenticated as e:
+            print(f"⚠️ Unauthenticated (Invalid API Key) with {model_name}: {e}")
+            raise HTTPException(
+                status_code=401,
+                detail="GEMINI_API_KEY_INVALID: The provided Gemini API key is invalid."
+            )
+        except google_exceptions.PermissionDenied as e:
+            print(f"⚠️ Permission Denied with {model_name}: {e}")
+            raise HTTPException(
+                status_code=403,
+                detail="GEMINI_API_KEY_INVALID: The provided Gemini API key is invalid or lacks necessary permissions."
+            )
+        except google_exceptions.ResourceExhausted as e:
+            print(f"⚠️ Rate/Quota Limit Exceeded with {model_name}: {e}")
+            raise HTTPException(
+                status_code=429,
+                detail="GEMINI_RATE_LIMIT_EXCEEDED: Gemini API rate limit or quota exceeded. Please try again later."
+            )
+        except google_exceptions.InvalidArgument as e:
+            print(f"⚠️ Invalid Argument with {model_name}: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"GEMINI_BAD_REQUEST: Invalid request parameters: {e.message}"
+            )
         except Exception as e:
+            err_msg = str(e)
+            if "safety" in err_msg.lower() or "blocked" in err_msg.lower() or "harmful" in err_msg.lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail="GEMINI_BAD_REQUEST: The request was blocked by AI safety filters (e.g. policy violations or illegal prompts). Please provide a valid request."
+                )
+            elif "API key not valid" in err_msg or "INVALID_ARGUMENT" in err_msg and "key" in err_msg.lower():
+                raise HTTPException(status_code=401, detail="GEMINI_API_KEY_INVALID: The provided Gemini API key is invalid.")
+            elif "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower() or "rate limit" in err_msg.lower():
+                raise HTTPException(status_code=429, detail="GEMINI_RATE_LIMIT_EXCEEDED: Gemini API rate limit or quota exceeded. Please try again later.")
+            elif "403" in err_msg or "PERMISSION_DENIED" in err_msg:
+                raise HTTPException(status_code=403, detail="GEMINI_API_KEY_INVALID: Permission denied. Please check your Gemini API key.")
+            elif "400" in err_msg or "INVALID_ARGUMENT" in err_msg:
+                raise HTTPException(status_code=400, detail=f"GEMINI_BAD_REQUEST: {err_msg}")
+            
             print(f"⚠️ {model_name} failed. Error: {e}")
             last_error = e
             continue
@@ -128,8 +174,11 @@ def health_check():
 
 @app.post("/generate")
 async def generate_graph(request: GraphRequest):
-    if not GENAI_KEY:
-        raise HTTPException(status_code=500, detail="API Key missing on Render.")
+    if not GENAI_KEY or GENAI_KEY == "missing" or not GENAI_KEY.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="GEMINI_API_KEY_MISSING: Gemini API key is missing. Please configure GEMINI_API_KEY in your .env file."
+        )
 
     system_prompt = """
     You are a System Visualization AI. 
@@ -147,6 +196,15 @@ async def generate_graph(request: GraphRequest):
     """
     try:
         response_text = get_smart_response(f"{system_prompt}\n\nUSER PROMPT: {request.prompt}", use_json=True)
+        return json.loads(response_text)
+    except HTTPException as he:
+        raise he
+    except json.JSONDecodeError as je:
+        print(f"JSONDecodeError: {je}")
+        raise HTTPException(
+            status_code=400,
+            detail="GEMINI_BAD_REQUEST: The AI visualization model failed to output structured JSON. This usually occurs if the prompt contains invalid commands, malicious requests, or is outside the scope of system visualization, resulting in a refusal or malformed output."
+        )
         return parse_json_response(response_text)
     except Exception as e:
         print(f"Error: {e}")
@@ -157,6 +215,8 @@ async def chat_with_ai(request: ChatRequest):
     try:
         response_text = get_smart_response(f"Context: {request.context}\nUser: {request.message}", use_json=False)
         return {"reply": response_text}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -165,5 +225,7 @@ async def regenerate_code(request: CodeRequest):
     try:
         response_text = get_smart_response(f"Convert: {request.prompt} to {request.language}. Return ONLY code.", use_json=False)
         return {"code_snippet": response_text.replace("```",""), "code_explanation": f"Converted to {request.language}"}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

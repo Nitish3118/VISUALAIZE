@@ -2,30 +2,12 @@
 'use client';
 
 import { toPng } from 'html-to-image';
-import {
-  Activity,
-  ArrowLeft,
-  BookOpen,
-  Box,
-  Check,
-  ChevronDown,
-  Code, Copy,
-  Download,
-  GitBranch,
-  Globe,
-  Layers,
-  Maximize2,
-  MessageSquare,
-  Mic,
-  Minimize2,
-  Network,
-  PanelRightClose, PanelRightOpen,
-  Paperclip,
-  PlayCircle,
-  RefreshCw,
-  Send,
-  Share2, Terminal,
-  Zap
+import { getLayoutedElements } from '../utils/layout'; 
+import { 
+  ArrowLeft, Box, GitBranch, Network, Share2, Terminal, 
+  Activity, BookOpen, PlayCircle, Layers, Code, Copy, Check, Zap, 
+  Globe, Mic, Download, ChevronDown, MessageSquare, Send, Paperclip, 
+  PanelRightClose, PanelRightOpen, AlertTriangle, ArrowRight, X, RefreshCw
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
@@ -42,8 +24,8 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import CustomNode from '../components/CustomNode';
-import { getLayoutedElements } from '../utils/layout';
 import HolographicScene from './HolographicScene';
+import ErrorModal from './ErrorModal';
 import LoadingCore from './LoadingCore';
 import LoadingOverlay from './LoadingOverlay';
 
@@ -87,7 +69,7 @@ interface WindowWithSpeech extends Window {
 
 // --- 🔧 CONFIGURATION: SINGLE SOURCE OF TRUTH ---
 // This ensures we ALWAYS talk to Render, avoiding localhost confusion.
-const BACKEND_URL = "https://visualaize-backend.onrender.com"; 
+const BACKEND_URL = "https://visualaize-backend.onrender.com";
 
 const glassControlsStyle = `
   .react-flow__panel .react-flow__controls {
@@ -220,6 +202,13 @@ function EditorContent({ onBack }: EditorProps) {
   const [isChatting, setIsChatting] = useState(false);
   
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [errorState, setErrorState] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    type: 'missing_key' | 'invalid_key' | 'rate_limit' | 'bad_request' | 'generic';
+    onRetry?: () => void;
+  } | null>(null);
 
   /**
    * Controls the fullscreen/focus mode for the ReactFlow canvas.
@@ -274,9 +263,44 @@ function EditorContent({ onBack }: EditorProps) {
       });
       
       if (!res.ok) {
-        const errText = await res.text();
-        console.error("❌ [BACKEND ERROR]:", res.status, errText);
-        throw new Error(`Server Error (${res.status}): ${errText}`);
+        let errDetail = "";
+        const bodyText = await res.text();
+        try {
+          const errJson = JSON.parse(bodyText);
+          errDetail = errJson.detail || bodyText;
+        } catch {
+          errDetail = bodyText;
+        }
+        
+        console.error("❌ [BACKEND ERROR]:", res.status, errDetail);
+
+        let errorTitle = "System Error";
+        let errorMsg = "An unexpected error occurred. Please try again.";
+        let errorType: 'missing_key' | 'invalid_key' | 'rate_limit' | 'bad_request' | 'generic' = 'generic';
+
+        if (errDetail.includes("GEMINI_API_KEY_MISSING") || (res.status === 401 && errDetail.toLowerCase().includes("missing"))) {
+          errorTitle = "API Key Missing";
+          errorMsg = "Please configure your Gemini API key in the backend .env file.";
+          errorType = "missing_key";
+        } else if (errDetail.includes("GEMINI_API_KEY_INVALID") || res.status === 403 || res.status === 401) {
+          errorTitle = "Invalid API Key";
+          errorMsg = "Please check your Gemini API key configuration. The current key is invalid or unauthorized.";
+          errorType = "invalid_key";
+        } else if (errDetail.includes("GEMINI_RATE_LIMIT_EXCEEDED") || res.status === 429) {
+          errorTitle = "Rate Limit Exceeded";
+          errorMsg = "Gemini API rate limit or quota exceeded. Please wait a moment and try again.";
+          errorType = "rate_limit";
+        } else if (errDetail.includes("GEMINI_BAD_REQUEST") || res.status === 400) {
+          errorTitle = "Invalid Request";
+          errorMsg = errDetail.replace("GEMINI_BAD_REQUEST: ", "") || "The AI model could not process this request.";
+          errorType = "bad_request";
+        } else {
+          errorTitle = "Model Execution Failure";
+          errorMsg = errDetail || "The models failed to process the request.";
+          errorType = "generic";
+        }
+
+        throw { title: errorTitle, message: errorMsg, type: errorType };
       }
       
       const data = await res.json();
@@ -304,9 +328,19 @@ function EditorContent({ onBack }: EditorProps) {
       console.log("LAYOUTED EDGES:", layoutedEdges.length);
       setIsSidebarOpen(true); 
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("🚨 [CRITICAL ERROR]:", err);
-      alert(`System Busy. Please check the console for the exact error.\n\nDetails: ${err}`);
+      const title = err.title || "Connection Failed";
+      const message = err.message || `Could not connect to the visualization server. Details: ${err}`;
+      const type = err.type || "generic";
+
+      setErrorState({
+        show: true,
+        title,
+        message,
+        type,
+        onRetry: () => generateGraph(text)
+      });
     } finally {
       setIsGenerating(false);
     }
@@ -319,22 +353,50 @@ function EditorContent({ onBack }: EditorProps) {
       const res = await fetch(`${BACKEND_URL}/regenerate_code`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: prompt, language: newLang }),
       });
+      if (!res.ok) {
+        let errDetail = "";
+        const bodyText = await res.text();
+        try {
+          const errJson = JSON.parse(bodyText);
+          errDetail = errJson.detail || bodyText;
+        } catch {
+          errDetail = bodyText;
+        }
+        
+        let errorTitle = "System Error";
+        let errorMsg = "Failed to rewrite code.";
+        let errorType: 'missing_key' | 'invalid_key' | 'rate_limit' | 'bad_request' | 'generic' = 'generic';
+
+        if (errDetail.includes("GEMINI_API_KEY_MISSING") || (res.status === 401 && errDetail.toLowerCase().includes("missing"))) {
+          errorTitle = "API Key Missing";
+          errorMsg = "Please configure your Gemini API key in the backend .env file.";
+          errorType = "missing_key";
+        } else if (errDetail.includes("GEMINI_API_KEY_INVALID") || res.status === 403 || res.status === 401) {
+          errorTitle = "Invalid API Key";
+          errorMsg = "Please check your Gemini API key configuration. The current key is invalid or unauthorized.";
+          errorType = "invalid_key";
+        } else if (errDetail.includes("GEMINI_RATE_LIMIT_EXCEEDED") || res.status === 429) {
+          errorTitle = "Rate Limit Exceeded";
+          errorMsg = "Gemini API rate limit or quota exceeded. Please wait a moment and try again.";
+          errorType = "rate_limit";
+        }
+
+        throw { title: errorTitle, message: errorMsg, type: errorType };
+      }
       const data = await res.json();
       setGraphData((prev: GraphData | null) => prev ? ({ ...prev, code_snippet: data.code_snippet, code_explanation: data.code_explanation }) : prev);
-      if (data) codeCache.current.set(newLang, {code_snippet: data.code_snippet ?? '', code_explanation: data.code_explanation ?? ''})
-    } catch (err) { alert("Failed to rewrite code."); } finally { setIsRegeneratingCode(false); }
-  } 
-
-  const handleLanguageChange = async (newLang: string) => {
-    setshowLanguageDropDown(false);
-    if (newLang === codeLanguage || !graphData) return;
-    if (codeCache.current.has(newLang)){
-      setCodeLanguage(newLang);
-      const cachedCodeData = codeCache.current.get(newLang);
-      setGraphData((prev: GraphData | null) => prev && cachedCodeData ? ({ ...prev, code_snippet: cachedCodeData.code_snippet, code_explanation: cachedCodeData.code_explanation }) : prev);
-      return; 
-    }
-    regenerateCode(newLang);
+    } catch (err: any) { 
+      const title = err.title || "Rewriting Failed";
+      const message = err.message || "Failed to rewrite code.";
+      const type = err.type || "generic";
+      setErrorState({
+        show: true,
+        title,
+        message,
+        type,
+        onRetry: () => regenerateCode(newLang)
+      });
+    } finally { setIsRegeneratingCode(false); }
   };
 
   const handleChatSubmit = async (e: React.FormEvent) => {
@@ -656,7 +718,7 @@ console.log(
                               {['Python', 'JavaScript', 'C++', 'Java'].map(lang => (
                                 <button 
                                   key={lang} 
-                                  onClick={() => handleLanguageChange(lang)} 
+                                  onClick={() => { regenerateCode(lang); setshowLanguageDropDown(false); }} 
                                   className="focus-ring w-full text-left px-4 py-2 text-xs text-slate-300 hover:bg-blue-600 hover:text-white transition-colors first:border-b-0"
                                 >
                                       {lang}
@@ -741,6 +803,19 @@ console.log(
             </>
         )}
       </div>
+      {errorState && (
+        <ErrorModal 
+          show={errorState.show}
+          title={errorState.title}
+          message={errorState.message}
+          type={errorState.type}
+          onRetry={() => {
+            const retryFn = errorState.onRetry;
+            setErrorState(null);
+            if (retryFn) retryFn();
+          }}
+          onClose={() => setErrorState(null)} 
+        />
       )}
     </div>
   );
